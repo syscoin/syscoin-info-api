@@ -26,7 +26,15 @@ let lastRecordedCirculatingSupply = {
   value: undefined,
   recordedAt: undefined,
 };
+let lastRecordedError = {
+  circulatingSupply: undefined,
+  totalSupply: undefined,
+};
 const largeNumber = 1000000000000000000;
+
+const getUnixtimestamp = () => {
+  return Math.floor(Date.now() / 1000);
+}
 
 const getSupply = async () => {
   const [supplyInfo, explorerData, nevmAdd] = await Promise.all([
@@ -62,16 +70,26 @@ const getCirculatingSupply = async () => {
 
 const recordTotalSupply = () => {
   return getSupply().then((supply) => {
-    lastRecordedTotalSupply.value = supply;
-    lastRecordedTotalSupply.recordedAt = new Date().toUTCString();
+    if (supply > 0) {
+      lastRecordedTotalSupply.value = supply;
+      lastRecordedTotalSupply.recordedAt = getUnixtimestamp();
+      lastRecordedError.totalSupply = undefined;
+    } else {
+      lastRecordedError.totalSupply = supply;
+    }
     return lastRecordedTotalSupply;
   });
 };
 
 const recordCirculatingSupply = () => {
   return getCirculatingSupply().then((supply) => {
-    lastRecordedCirculatingSupply.recordedAt = new Date().toUTCString();
-    lastRecordedCirculatingSupply.value = supply;
+    if (supply > 0) {
+      lastRecordedCirculatingSupply.value = supply;
+      lastRecordedCirculatingSupply.recordedAt = getUnixtimestamp();
+      lastRecordedError.circulatingSupply = undefined;
+    } else {
+      lastRecordedError.circulatingSupply = supply;
+    }
     return lastRecordedCirculatingSupply;
   });
 };
@@ -160,7 +178,16 @@ app.get("/triggerRecordSupply", async (req, res) => {
 
 app.get("/health", async (req, res) => {
   console.log("Health check", new Date());
-  res.send("OK");
+  if (undefined !== lastRecordedError.circulatingSupply || undefined !== lastRecordedError.totalSupply) {
+    res.json({
+      status: "ERROR",
+      lastCirculatingSupply: lastRecordedCirculatingSupply,
+      lastTotalSupply: lastRecordedTotalSupply,
+      lastError: lastRecordedError,
+    })
+  } else {
+    res.json({status: "OK"});
+  }
 });
 
 app.listen(port, () => {
