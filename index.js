@@ -4,6 +4,10 @@ const express = require("express");
 const app = express();
 const port = process.env.PORT || 3000;
 const CONFIGURATION = require("./config");
+const TOTAL_SUPPLY_URL =
+  "https://explorer-v5.syscoin.org/api?module=stats&action=coinsupply";
+const CONTRACT_BALANCE_URL =
+  `https://explorer.syscoin.org/api?module=account&action=balance&address=${CONFIGURATION.SyscoinVaultManager}`;
 
 let lastRecordedTotalSupply = {
   value: undefined,
@@ -23,7 +27,7 @@ const largeNumber = 1000000000000000000;
 
 const getUnixtimestamp = () => {
   return Math.floor(Date.now() / 1000);
-}
+};
 
 // Create an Axios instance pre-configured for UTXO RPC
 const rpc = axios.create({
@@ -45,8 +49,10 @@ const explorerApi = axios.create({
  */
 async function getTxOutSetInfo() {
   console.log("Fetching UTXO gettxoutsetinfo via RPC...");
+  const rpcRemote = `http://${process.env.SYSCOIN_CORE_RPC_HOST}:${process.env.SYSCOIN_CORE_RPC_PORT}`;
+  const rpcMethod = "gettxoutsetinfo";
   try {
-    const requestData = { jsonrpc: '1.0', id: 'gettxoutsetinfo', method: 'gettxoutsetinfo', params: [] };
+    const requestData = { jsonrpc: '1.0', id: 'gettxoutsetinfo', method: rpcMethod, params: [] };
     const response = await rpc.post('', requestData);
 
     if (response.data.error) {
@@ -59,7 +65,7 @@ async function getTxOutSetInfo() {
     return response.data.result;
 
   } catch (err) {
-    let errorMessage = `Error fetching UTXO set info: ${err.message}`;
+    let errorMessage = `UTXO RPC remote=${rpcRemote} method=${rpcMethod} failed: ${err.message}`;
     if (err.response) {
       errorMessage += ` (Status: ${err.response.status}, Data: ${JSON.stringify(err.response.data)})`;
     } else if (err.request) {
@@ -73,15 +79,17 @@ async function getTxOutSetInfo() {
 const getSupply = async () => {
   console.log("Fetching total supply components...");
   try {
-  const [supplyInfo, explorerResponse, nevmAddResponse] = await Promise.all([
-    getTxOutSetInfo(),
-    explorerApi.get(
-      "https://explorer-v5.syscoin.org/api?module=stats&action=coinsupply"
-    ),
-    explorerApi.get(
-      `https://explorer.syscoin.org/api?module=account&action=balance&address=${CONFIGURATION.SyscoinVaultManager}`
-    )
-  ]);
+    const [supplyInfo, explorerResponse, nevmAddResponse] = await Promise.all([
+      getTxOutSetInfo(),
+      explorerApi.get(TOTAL_SUPPLY_URL).catch((error) => {
+        const status = error.response ? ` status=${error.response.status}` : "";
+        throw new Error(`NEVM total supply remote=${TOTAL_SUPPLY_URL}${status} failed: ${error.message}`);
+      }),
+      explorerApi.get(CONTRACT_BALANCE_URL).catch((error) => {
+        const status = error.response ? ` status=${error.response.status}` : "";
+        throw new Error(`NEVM contract balance remote=${CONTRACT_BALANCE_URL}${status} failed: ${error.message}`);
+      }),
+    ]);
 
   // Extract data and validate
   const utxoSupply = supplyInfo.total_amount; // Already validated in getTxOutSetInfo
