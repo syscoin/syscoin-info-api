@@ -37,7 +37,7 @@ This service expects a **Syscoin Core node already running** on the host (or els
 
 **Optional:**
 
-- `SYSCOIN_VAULT_MANAGER` — override the SyscoinVaultManager contract address (default in `config.js`)
+- `SYSCOIN_VAULT_MANAGER` — pin the SyscoinVaultManager address (skips height autoswitch; defaults in `config.js`)
 - `PORT` — HTTP listen port (default `3000`)
 - `POLLING_INTERVAL_SECONDS` — how often supply is recalculated (default `30`)
 - `TOTAL_SUPPLY_URL` — primary NEVM coinsupply explorer URL (default `explorer1.syscoin.org`)
@@ -53,7 +53,7 @@ See also: https://github.com/syscoin/docker-syscoin-core#usage
 
 ## Syscoin Vault Manager
 
-The official contract address is defined in `config.js` and can be overridden via `SYSCOIN_VAULT_MANAGER` in `config/env`.
+Addresses and the Bridge V2 cutover height (`2292816`) are defined in `config.js`. Each poll uses `gettxoutsetinfo.height` to select the legacy vault or the V2 vault. Set `SYSCOIN_VAULT_MANAGER` in `config/env` to pin one address and skip the switch.
 
 ```
 total supply = UTXO supply + NEVM supply − vault contract balance

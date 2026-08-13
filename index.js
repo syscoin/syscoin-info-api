@@ -10,8 +10,17 @@ const TOTAL_SUPPLY_URLS = [
   process.env.TOTAL_SUPPLY_URL_BACKUP ||
     "https://explorer2.syscoin.org/api?module=stats&action=coinsupply",
 ];
-const CONTRACT_BALANCE_URL =
-  `https://explorer.syscoin.org/api?module=account&action=balance&address=${CONFIGURATION.SyscoinVaultManager}`;
+const contractBalanceUrl = (address) =>
+  `https://explorer.syscoin.org/api?module=account&action=balance&address=${address}`;
+
+function vaultForHeight(height) {
+  if (typeof height !== "number") {
+    throw new Error(`gettxoutsetinfo did not return a numeric height: ${JSON.stringify(height)}`);
+  }
+  return height >= CONFIGURATION.BridgeV2StartBlock
+    ? CONFIGURATION.SyscoinVaultManagerV2
+    : CONFIGURATION.SyscoinVaultManagerLegacy;
+}
 
 let lastRecordedTotalSupply = {
   value: undefined,
@@ -134,14 +143,18 @@ async function getTxOutSetInfo() {
 
 const getSupply = async () => {
   console.log("Fetching total supply components...");
-  const [supplyInfo, nevmSupplyResult, nevmAddResponse] = await Promise.all([
+  const [supplyInfo, nevmSupplyResult] = await Promise.all([
     getTxOutSetInfo(),
     fetchNevmCoinSupply(TOTAL_SUPPLY_URLS),
-    explorerApi.get(CONTRACT_BALANCE_URL).catch((error) => {
-      const status = error.response ? ` status=${error.response.status}` : "";
-      throw new Error(`NEVM contract balance remote=${CONTRACT_BALANCE_URL}${status} failed: ${error.message}`);
-    }),
   ]);
+
+  const vaultAddress =
+    CONFIGURATION.SyscoinVaultManager || vaultForHeight(supplyInfo.height);
+  const vaultBalanceUrl = contractBalanceUrl(vaultAddress);
+  const nevmAddResponse = await explorerApi.get(vaultBalanceUrl).catch((error) => {
+    const status = error.response ? ` status=${error.response.status}` : "";
+    throw new Error(`NEVM contract balance remote=${vaultBalanceUrl}${status} failed: ${error.message}`);
+  });
 
   // Extract data and validate
   const utxoSupply = supplyInfo.total_amount; // Already validated in getTxOutSetInfo
@@ -158,8 +171,10 @@ const getSupply = async () => {
 
   console.log({
     utxoSupply,
+    utxoHeight: supplyInfo.height,
     nevmSupply,
     nevmSupplyUrl: nevmSupplyResult.url,
+    vaultAddress,
     nevmContract,
   });
   const cmcSupply = nevmSupply - nevmContract + utxoSupply;
