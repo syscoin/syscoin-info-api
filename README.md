@@ -61,7 +61,8 @@ total supply = UTXO supply + NEVM supply − vault contract balance
 
 ## Endpoints
 
-Host: https://info.syscoin.org/
+Public supply endpoints use the `/api` prefix at https://info.syscoin.org/.
+The Express service itself serves the paths below without that prefix.
 
 ### `GET /totalsupply`
 
@@ -71,17 +72,19 @@ Returns total supply (UTXO + NEVM - minus vault balance) as plain text.
 
 Returns circulating supply as plain text.
 
-### `GET /triggerRecordSupply`
-
-Manually triggers an immediate supply recalculation. On startup and by default every 30 seconds, supply is refreshed automatically via polling (`POLLING_INTERVAL_SECONDS` in `config/env`).
-
 ### `GET /health`
 
 Simple liveness check (`OK`).
 
 ### `GET /status`
 
-Detailed status including last recorded values and any fetch errors.
+Detailed status including last recorded values and any fetch errors. Returns
+HTTP 503 until the first successful refresh. The supply routes retain their last
+successful values if a later refresh fails.
+
+The first refresh starts on startup. Subsequent refreshes run after the configured
+`POLLING_INTERVAL_SECONDS` delay from the end of the preceding refresh. The
+service does not expose a manual refresh endpoint.
 
 ## Docker
 
