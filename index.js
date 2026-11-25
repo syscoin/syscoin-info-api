@@ -49,6 +49,8 @@ const rpc = axios.create({
     password: process.env.SYSCOIN_CORE_RPC_PASSWORD
   },
   headers: { 'Content-Type': 'application/json' },
+  proxy: false,
+  maxRedirects: 0,
   timeout: 10000
 });
 
@@ -143,10 +145,14 @@ async function getTxOutSetInfo() {
 
 const getSupply = async () => {
   console.log("Fetching total supply components...");
-  const [supplyInfo, nevmSupplyResult] = await Promise.all([
+  const [utxo, nevm] = await Promise.allSettled([
     getTxOutSetInfo(),
     fetchNevmCoinSupply(TOTAL_SUPPLY_URLS),
   ]);
+  if (utxo.status === "rejected") throw utxo.reason;
+  if (nevm.status === "rejected") throw nevm.reason;
+  const supplyInfo = utxo.value;
+  const nevmSupplyResult = nevm.value;
 
   const vaultAddress =
     CONFIGURATION.SyscoinVaultManager || vaultForHeight(supplyInfo.height);
@@ -259,23 +265,16 @@ app.get("/circulatingsupply", (req, res) => {
   }
 });
 
-app.get("/triggerRecordSupply", async (req, res) => {
-  console.log("Manual trigger received: Recording supply...");
-  await runRecordingCycle();
-  res.status(200).json({
-    newRecordedSupply: lastRecordedTotalSupply,
-    newCirculatingSupply: lastRecordedCirculatingSupply,
-  });
-});
-
 app.get("/health", (req, res) => {
   console.log("Health check", new Date());
   res.status(200).send("OK");
 });
 
 app.get("/status", (req, res) => {
+  const initialized = lastRecordedTotalSupply.value !== undefined
+    && lastRecordedCirculatingSupply.value !== undefined;
   if (undefined !== lastAttemptError.circulatingSupply || undefined !== lastAttemptError.totalSupply) {
-    res.status(200).json({
+    res.status(initialized ? 200 : 503).json({
       status: "ERROR",
       // Send the last *good* recorded state
       lastCirculatingSupply: lastRecordedCirculatingSupply,
@@ -286,54 +285,52 @@ app.get("/status", (req, res) => {
           totalSupply: lastAttemptError.totalSupply,
       },
     });
+  } else if (!initialized) {
+    res.status(503).json({ status: "INITIALIZING" });
   } else {
-    res.status(200).json({status: "OK"});
+    res.status(200).json({ status: "OK" });
   }
 });
 
-const server = app.listen(port, async () => {
+const pollingIntervalSeconds = process.env.POLLING_INTERVAL_SECONDS
+  ? parseInt(process.env.POLLING_INTERVAL_SECONDS, 10)
+  : 30;
+let pollingTimeout;
+let stopping = false;
+
+async function pollSupply() {
+  await runRecordingCycle();
+  if (!stopping && pollingIntervalSeconds > 0) {
+    pollingTimeout = setTimeout(pollSupply, pollingIntervalSeconds * 1000);
+  }
+}
+
+const server = app.listen(port, () => {
   console.log(`Syscoin Info app listening on port ${port}`);
-
-  console.log("Performing initial supply recording on startup...");
-  await runRecordingCycle(); // Run the first cycle immediately
-  console.log("Initial supply recording attempt complete.");
-
-  // --- Periodic Polling ---
-  const POLLING_INTERVAL_SECONDS = process.env.POLLING_INTERVAL_SECONDS ? parseInt(process.env.POLLING_INTERVAL_SECONDS, 10) : 30; // Default 30 seconds
-  const POLLING_INTERVAL_MS = POLLING_INTERVAL_SECONDS * 1000;
-  let pollingInterval;
-  if (POLLING_INTERVAL_MS > 0) { // Avoid interval of 0 or less
-    console.log(`Starting supply polling every ${POLLING_INTERVAL_SECONDS} seconds.`);
-    pollingInterval = setInterval(runRecordingCycle, POLLING_INTERVAL_MS);
-  } else {
-    console.log("Polling interval is set to 0 or less. Polling disabled after initial fetch.");
-  }
-
-  const shutdown = (signal) => {
-    console.log(`${signal} signal received: Shutting down server...`);
-    if (pollingInterval) {
-      clearInterval(pollingInterval);
-      console.log("Polling stopped.");
-    }
-
-    server.close((err) => { // Close the HTTP server
-      if (err) {
-        console.error("Error closing HTTP server:", err);
-        process.exit(1);
-      } else {
-        console.log('HTTP server closed.');
-        process.exit(0);
-      }
-    });
-    setTimeout(() => {
-      console.error('Could not close connections gracefully, forcefully shutting down');
-      process.exit(1);
-    }, 10*1000);
-  };
-
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
+  void pollSupply();
 });
+
+function shutdown(signal) {
+  if (stopping) return;
+  stopping = true;
+  clearTimeout(pollingTimeout);
+  console.log(`${signal} signal received: Shutting down server...`);
+  server.close((err) => {
+    if (err) {
+      console.error("Error closing HTTP server:", err);
+      process.exit(1);
+    }
+    console.log('HTTP server closed.');
+    process.exit(0);
+  });
+  setTimeout(() => {
+    console.error('Could not close connections gracefully, forcefully shutting down');
+    process.exit(1);
+  }, 10000);
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
